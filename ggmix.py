@@ -55,7 +55,6 @@ class LayerNorm(nn.Module):
         normalized_dim = len(self.normalized_shape)
         param_shape = self.normalized_shape
         
-        # 初始化gamma为1.0，beta为0.0
         self.gamma = nn.Parameter(torch.ones(*param_shape) * 1.0)
         self.beta = nn.Parameter(torch.zeros(*param_shape))
         
@@ -66,20 +65,15 @@ class LayerNorm(nn.Module):
         if self.data_format == "channels_last":
             # 使用F.layer_norm进行channels_last层归一化
             return F.layer_norm(x, self.normalized_shape, self.gamma, self.beta, self.eps)
-        
-        # 自定义实现channels_first
+
         channel_dim = 1
-        
-        # 计算通道维度的均值
+
         mean = x.mean(dim=channel_dim, keepdim=True)
-        
-        # 计算通道维度的方差，使用epsilon进行数值稳定性
+
         var = x.var(dim=channel_dim, keepdim=True, unbiased=False)
-        
-        # 归一化
+
         x_normalized = (x - mean) / torch.sqrt(var + self.eps)
-        
-        # 缩放和偏移
+
         reshaped_gamma = self.gamma.view((-1,) + (1,) * (x.ndim - 2))
         reshaped_beta = self.beta.view((-1,) + (1,) * (x.ndim - 2))
         
@@ -95,22 +89,19 @@ class Global_Guidance(nn.Module):
         self.window_size = window_size
         cdim = dim + k
         embed_dim = window_size**2
-        
-        # 输入卷积层
+
         self.in_conv = nn.Sequential(
             nn.Conv2d(cdim, cdim//4, 1),
             LayerNorm(cdim//4),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
         )
 
-        # 输出偏移量
         self.out_offsets = nn.Sequential(
             nn.Conv2d(cdim//4, cdim//8, 1),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
             nn.Conv2d(cdim//8, 2, 1),
         )
 
-        # 输出mask
         self.out_mask = nn.Sequential(
             nn.Linear(embed_dim, window_size),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
@@ -118,14 +109,13 @@ class Global_Guidance(nn.Module):
             nn.Softmax(dim=-1)
         )
 
-        # 输出通道注意力
         self.out_CA = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(cdim//4, dim, 1),
             nn.Sigmoid(),
         )
 
-        # 输出空间注意力
+
         self.out_SA = nn.Sequential(
             nn.Conv2d(cdim//4, 1, 3, 1, 1),
             nn.Sigmoid(),
@@ -168,12 +158,11 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, q, k, v):
         B, N, C = q.shape
-        #由外部输入的q, k, v进行线性变换，并reshape为(B, N, num_heads, head_dim)，然后permute为(num_heads, B, N, head_dim)
+
         q = self.q_proj(q).reshape(B, N, self.num_heads, self.head_dim).permute(2, 0, 1, 3)
         k = self.k_proj(k).reshape(B, N, self.num_heads, self.head_dim).permute(2, 0, 1, 3)
         v = self.v_proj(v).reshape(B, N, self.num_heads, self.head_dim).permute(2, 0, 1, 3)
 
-        # 计算注意力分数
         attn = (q @ k.transpose(-2, -1)) * (1.0 / torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)))
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -185,27 +174,16 @@ class MultiHeadAttention(nn.Module):
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bottleneck_ratio=0.5, groups=4):
-        """
-        :param in_channels: 输入通道数
-        :param out_channels: 输出通道数
-        :param kernel_size: 卷积核大小
-        :param stride: 步幅
-        :param padding: 填充
-        :param bottleneck_ratio: 用于瓶颈层的通道缩减比例
-        :param groups: 逐点卷积的分组数
-        """
+
         super().__init__()
         bottleneck_channels = int(in_channels * bottleneck_ratio)
-        
-        # 深度卷积
+
         self.depthwise = nn.Conv2d(
             in_channels, in_channels, kernel_size, stride=stride, padding=padding, groups=in_channels
         )
         
-        # 瓶颈层降维
         self.bottleneck = nn.Conv2d(in_channels, bottleneck_channels, kernel_size=1, stride=1, padding=0)
         
-        # 分组逐点卷积
         self.pointwise = nn.Conv2d(
             bottleneck_channels, out_channels, kernel_size=1, stride=1, padding=0, groups=groups
         )
@@ -240,7 +218,6 @@ class GGmix(nn.Module):
         self.act = nn.GELU()
         self.route = Global_Guidance(dim, window_size, ratio=ratio)
 
-        # 生成global feature
         self.global_predictor = nn.Sequential(
             nn.Conv2d(3, 8, 1, 1, 0, bias=True),
             nn.LeakyReLU(negative_slope=0.1, inplace=True),
@@ -287,7 +264,6 @@ class GGmix(nn.Module):
         q1 = rearrange(q1, 'b (n dh dw) c -> (b n) (dh dw) c', n=N_, dh=self.window_size, dw=self.window_size)
         k1 = rearrange(k1, 'b (n dh dw) c -> (b n) (dh dw) c', n=N_, dh=self.window_size, dw=self.window_size)
 
-        # 使用多头自注意力机制
         f_attn = self.multihead_attn(q1, k1, v1)
 
         f_attn = rearrange(f_attn, '(b n) (dh dw) c -> b n (dh dw c)',
